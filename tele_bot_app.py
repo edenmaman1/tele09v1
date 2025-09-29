@@ -17,7 +17,7 @@ is_superman = False
 is_permitted = False
 is_admin = False
 input_id1 = None
-user_admin_array = ['7228364', '7338109']
+user_admin_array = ['7228364', '7338109','5263826']
 exclude = ['5914224']
 
 # Connect to Google Sheets
