@@ -7,17 +7,22 @@ from oauth2client.service_account import ServiceAccountCredentials
 from telegram import Update, InlineKeyboardMarkup, InlineKeyboardButton
 from telegram.ext import ApplicationBuilder, CommandHandler, MessageHandler, ContextTypes, filters
 
+# import logging
+# logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
+# logger = logging.getLogger("bot")
+
 # Setup Google Sheets access
-scope = ['https://spreadsheets.google.com/feeds', 'https://www.googleapis.com/auth/drive']
+scope = ['https://spreadsheets.google.com/feeds',
+         'https://www.googleapis.com/auth/drive']  # ,"https://www.googleapis.com/auth/spreadsheets"]
 creds = ServiceAccountCredentials.from_json_keyfile_name('cred.json', scope)
 client = gspread.authorize(creds)
 
 # Global variables
-is_superman = False
+# is_superman = False
 is_permitted = False
 is_admin = False
 input_id1 = None
-user_admin_array = ['7228364', '7338109','5263826']
+user_admin_array = ['7228364', '7338109', '5263826']
 exclude = ['5914224']
 
 # Connect to Google Sheets
@@ -29,8 +34,8 @@ phone_sheet_url = "https://docs.google.com/spreadsheets/d/18EHXmBQx0eaBuQj_h6s-R
 tele_token = "7656861568:AAFeAWvsPeJFXaDmYk0bnyQsjPKWW8AqQAs"
 
 # Open the Google Sheets
-present_sheet = client.open_by_url(present_sheet_url).worksheet('א')
 signatures_spreadsheet = client.open_by_url(signature_sheet_url)
+present_sheet = client.open_by_url(present_sheet_url).worksheet('א')
 logging_spreadsheet = client.open_by_url(logging_sheet_url)
 phone_spreadsheet = client.open_by_url(phone_sheet_url).sheet1
 
@@ -49,8 +54,6 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_states[user_id] = 'awaiting_id'
     print("✅ Bot is running and waiting for messages...")
     await update.message.reply_text("ברוך הבא! אנא הזן את המספר האישי שלך:")
-    global is_superman
-    is_superman = False
 
 
 # ──────────────────────────────────────────────
@@ -58,7 +61,6 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
     message_text = update.message.text.strip()
     state = user_states.get(user_id)
-    print('state: ', state)
 
     if state == 'awaiting_id':
         await process_personal_id(update, context, message_text)
@@ -70,7 +72,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
     elif state == 'awaiting_report':
         await handle_report_manu_choice(update, context, message_text)
-        user_states[user_id] = 'awaiting_report'
+        user_states[user_id] = 'awaiting_menu'
         return
     else:
         await update.message.reply_text("שלח /start כדי להתחיל מחדש.")
@@ -101,7 +103,7 @@ async def process_personal_id(update, context, input_id):
     # await update_user_activity(context)
     await is_user_admin(update, context)
     await is_user_permitted(update, context)
-    await is_user_superman(update, context)
+    # await is_user_superman(update, context)
     await show_main_menu(update)
 
 
@@ -149,7 +151,7 @@ async def get_phone_number(update: Update, context: ContextTypes.DEFAULT_TYPE, n
         for _, row_data in matched_rows.iterrows():
             first_name = str(row_data.get('שם פרטי', '')).strip()
             last_name = str(row_data.get('שם משפחה', '')).strip()
-            phone_number =str(row_data.get('טלפון נייד', '')).strip()
+            phone_number = str(row_data.get('טלפון נייד', '')).strip()
             if first_name or last_name:
                 row_desc = []
                 res = f"מספר הטלפון של {first_name} {last_name} הוא {phone_number}"
@@ -175,6 +177,9 @@ async def get_user_team(input_id):
     matched_rows = df[df['מספר אישי'].astype(str) == input_id]
     if not matched_rows.empty:
         team = str(matched_rows.iloc[0].get('מחלקה', '')).strip()
+        if 'מחלקה' in team:
+            team = team.replace('מחלקה', 'צוות').strip()
+            print(f"User {input_id1} team set to {team}"'')
         return team
     return None
 
@@ -324,6 +329,76 @@ async def get_weapon_report(update, context):
     return res
 
 
+async def get_team_weapon_report(update, context):
+    sheet = signatures_spreadsheet.worksheet(context.user_data['team'])
+    data1 = sheet.get_all_records()
+    df1 = pd.DataFrame(data1)
+    grouped = df1.groupby("סוג")
+
+    response_lines = [f"\n  {context.user_data['team']}פירוט הצלמ ב  "]
+    for type_, group in grouped:
+        response_lines.append(f"*{type_}:*")
+        for _, row in group.iterrows():
+            response_lines.append(f"{row['חייל']} {row['מסד']}")
+        response_lines.append("")
+    response = "\n".join(response_lines).strip() + "\n\n" + f"0️⃣ חזרה לתפריט הראשי\n\n"
+    await update.message.reply_text(response, parse_mode='Markdown')
+
+
+def _escape_md(text: str) -> str:
+    """Escape Telegram MarkdownV2 specials that may appear in names."""
+    if not isinstance(text, str):
+        text = str(text)
+    return text.replace('*', r'\*').replace('_', r'\_')
+
+async def get_team_guns_report(update, context):
+    sheet = signatures_spreadsheet.worksheet('נשק אישי')
+    df1 = pd.DataFrame(sheet.get_all_records())
+    team = context.user_data['team'].replace('צוות', 'מחלקה')
+    filtered = df1[df1["מחלקה"] == team].copy()
+    filtered = filtered[filtered["סוג נשק"].notna() & (filtered["סוג נשק"].str.upper() != "N/A") & (filtered["סוג נשק"].str.strip() != "")]
+
+
+    filtered.sort_values(by=["סוג נשק", "שם פרטי","שם משפחה", "מספר נשק"], inplace=True)
+    lines = [f"*{_escape_md(team)}*"]
+    for sog, group in filtered.groupby("סוג נשק", sort=False):
+        lines.append(f"*{_escape_md(str(sog))}:*")
+        for _, row in group.iterrows():
+            full_name = f"{_escape_md(row['שם פרטי'])} {_escape_md(row['שם משפחה'])}"
+            base = _escape_md(str(row["מספר נשק"]))
+            lines.append(f"{full_name} {base}")
+        lines.append("")  # blank line between סוג groups
+
+    response = "\n".join(lines).strip() + "\n\n" + f"0️⃣ חזרה לתפריט הראשי\n\n"
+    await update.message.reply_text(response, parse_mode='Markdown')
+
+async def get_team_guns_summary_report(update, context):
+    sheet = signatures_spreadsheet.worksheet('נשק אישי')
+    df1 = pd.DataFrame(sheet.get_all_records())
+    team = context.user_data['team'].replace('צוות', 'מחלקה')
+    filtered = df1[df1["מחלקה"] == team].copy()
+    filtered = filtered[
+        filtered["סוג נשק"].notna() &
+        (filtered["סוג נשק"].str.upper() != "N/A") &
+        (filtered["סוג נשק"].str.strip() != "")
+        ]
+
+    counts = filtered["סוג נשק"].value_counts().reset_index()
+    counts.columns = ["סוג נשק", "כמות"]
+
+    lines = [f"*ספירת נשקים לפי סוג - פלוגה {_escape_md(team)}:*"]
+    for _, row in counts.iterrows():
+        lines.append(f"{row['סוג נשק']}: {int(row['כמות'])}")
+
+    total = counts["כמות"].sum()
+    lines.append("")
+    lines.append(f"*סה״כ נשקים:* {total}")
+
+    # response = "\n".join(lines)
+
+    response = "\n".join(lines).strip() + "\n\n" + f"0️⃣ חזרה לתפריט הראשי\n\n"
+    await update.message.reply_text(response, parse_mode='Markdown')
+
 async def get_logistic_report(update, context):
     sheet = signatures_spreadsheet.worksheet('לוגיסטיקה')
     rows = sheet.get_all_values()[1:]
@@ -361,7 +436,7 @@ async def get_guns_report(update, context):
 # ──────────menus───────────────────────
 
 async def show_main_menu(update):
-    if is_admin:
+    if is_admin or is_permitted:
         await update.message.reply_text(
             "📋 *תפריט ראשי:*\n"
             "1️⃣ נוכחות\n"
@@ -373,34 +448,13 @@ async def show_main_menu(update):
             "הקלד את מספר האפשרות הרצויה:",
             parse_mode='Markdown'
         )
-    elif is_superman:
-        await update.message.reply_text(
-            "📋 *תפריט ראשי (סופרמן):*\n"
-            "1️⃣ נוכחות\n"
-            "2️⃣ חתימות\n"
-            "3️⃣ חפש מספר טלפון\n"
-            "4️⃣ תחמושת אישית\n"
-            "0️⃣ חזרה לתפריט זה בכל שלב\n\n"
-            "הקלד את מספר האפשרות הרצויה:",
-            parse_mode='Markdown'
-        )
-    elif is_permitted:
-        await update.message.reply_text(
-            "📋 *תפריט ראשי(מורשים):*\n"
-            "1️⃣ נוכחות\n"
-            "2️⃣ חתימות\n"
-            "3️⃣ חפש מספר טלפון\n"
-            "4️⃣ דוחות\n"
-            "0️⃣ חזרה לתפריט זה בכל שלב\n\n"
-            "הקלד את מספר האפשרות הרצויה:",
-            parse_mode='Markdown'
-        )
     else:
         await update.message.reply_text(
             "📋 *תפריט ראשי:*\n"
             "1️⃣ נוכחות\n"
             "2️⃣ חתימות\n"
             "3️⃣ חפש מספר טלפון\n"
+            "4️⃣ תחמושת אישית\n"
             "0️⃣ חזרה לתפריט זה בכל שלב\n\n"
             "הקלד את מספר האפשרות הרצויה:",
             parse_mode='Markdown'
@@ -424,8 +478,11 @@ async def show_report_manu(update):
     else:
         await update.message.reply_text(
             "📋 *תפריט ,דוחות ראשי:*\n"
-            "1️⃣ הצג דוח תחמושת\n"
-            "2️⃣ הצג דוח צלמ\n"
+            "1️⃣ הצג דוח תחמושת בצוות\n"
+            "2️⃣ הצג דוח צלמ בצוות\n"
+            "3️⃣ הצג התפלגות צלמ בצוות\n"
+            "4️⃣ הצג התפלגות נשק בצוות\n"
+            "5️⃣ הצג דוח נשק בצוות\n"
             "0️⃣ חזרה לתפריט זה בכל שלב\n\n"
             "הקלד את מספר האפשרות הרצויה:",
             parse_mode='Markdown'
@@ -524,7 +581,7 @@ async def show_guns_bunker_report_response(context, update, response):
     )
 
 
-async def show_logistic_report_response(context, update, response, response2):
+async def show_logistic_report_response(context, update, response):
     msg = 'דוח לוגיסטי מסכם'
     await update.message.reply_text(
         f"📋 *{msg}:*\n\n"
@@ -554,78 +611,89 @@ async def handle_menu_choice(update, context, choice):
         await get_name(update, context)
         return
 
-    elif choice == '4' and is_superman:
+    elif choice == '4':
+        await update.message.reply_text("טוען, נא להמתין...")
         await handle_superman_ammo(update, context)
         return
-
-    elif choice == '4' and is_permitted:
-        user_states[user_id] = 'awaiting_report'
-        await show_report_manu(update)
-        return
-    elif choice == '5' and is_admin:
+    elif choice == '5' and is_admin or is_permitted:
         user_states[user_id] = 'awaiting_report'
         await show_report_manu(update)
         return
 
     else:
-        await update.message.reply_text("אפשרות לא מוכרת. אנא הקלד 1,2,3  או 0 לחזרה לתפריט.") if not is_superman else \
+        await update.message.reply_text("אפשרות לא מוכרת. אנא הקלד  4 ,1,2,3  או 0 לחזרה לתפריט.") if not is_admin or is_permitted else \
             await update.message.reply_text("אפשרות לא מוכרת. אנא הקלד 1,2,3,4  או 0 לחזרה לתפריט.")
         return
 
 
 async def handle_report_manu_choice(update, context, choice):
     user_id = update.effective_user.id
+    user_states[user_id] = 'awaiting_manu'
     if choice == '0':
-        user_states[input_id1] = 'awaiting_manu'
+        user_states[user_id] = 'awaiting_manu'
         await show_main_menu(update)
         return
     elif choice == '1' and is_admin:
-        user_states[user_id] = 'awaiting_report'
+        user_states[user_id] = 'awaiting_manu'
         res = await get_ammo_summary_report(update, context)
         res2 = await get_ammo_distribution_report(update, context)
         await show_summary_report_response(context, update, res, res2)
         return
     elif choice == '1' and not is_admin:
-        user_states[user_id] = 'awaiting_report'
+        user_states[user_id] = 'awaiting_manu'
         res = await get_ammo_summary_report(update, context)
         await show_report_response(context, update, res)
         return
     elif choice == '2' and is_admin:
-        user_states[user_id] = 'awaiting_report'
+        user_states[user_id] = 'awaiting_manu'
+        await update.message.reply_text("טוען, נא להמתין...")
         res = await get_weapon_report(update, context)
         res2 = await get_weapon_distribution_report(update, context)
         await show_weapon_summary_report_response(context, update, res, res2)
         return
     elif choice == '2':
-        user_states[user_id] = 'awaiting_report'
+        user_states[user_id] = 'awaiting_manu'
+        await update.message.reply_text("טוען, נא להמתין...")
         res = await get_weapon_report(update, context)
         await show_weapon_report_response(context, update, res)
         return
+    elif choice == '3' and is_permitted:
+        user_states[user_id] = 'awaiting_manu'
+        await update.message.reply_text("טוען, נא להמתין...")
+        await get_team_weapon_report(update, context)
+        return
     elif choice == '3' and is_admin:
-        user_states[user_id] = 'awaiting_report'
+        user_states[user_id] = 'awaiting_manu'
         res = await get_guns_report(update, context)
         await show_guns_report_response(context, update, res)
         return
     elif choice == '4' and is_admin:
-        user_states[user_id] = 'awaiting_report'
+        user_states[user_id] = 'awaiting_manu'
         res = await get_ammo_summary_report_bunker(update, context)
         await show_ammo_bunker_report_response(context, update, res)
         return
+    elif choice == '4' and is_permitted:
+        user_states[user_id] = 'awaiting_manu'
+        await get_team_guns_report(update, context)
+        return
+    elif choice == '5' and is_permitted:
+        user_states[user_id] = 'awaiting_manu'
+        await get_team_guns_summary_report(update, context)
+        return
     elif choice == '5' and is_admin:
-        user_states[user_id] = 'awaiting_report'
+        user_states[user_id] = 'awaiting_manu'
         res = await get_guns_summary_report_bunker(update, context)
         res2 = await get_weapons_summary_report_bunker(update, context)
         await show_bunker_report_response(context, update, res, res2)
         return
     elif choice == '6' and is_admin:
-        user_states[user_id] = 'awaiting_report'
+        user_states[user_id] = 'awaiting_manu'
         res = await get_logistic_report(update, context)
-        res2 = ''
-        await show_logistic_report_response(context, update, res, res2)
+        await show_logistic_report_response(context, update, res)
         return
     else:
-        user_states[input_id1] = 'awaiting_manu'
-        await update.message.reply_text("אפשרות לא מוכרת. אנא הקלד 1,2 או 0 לחזרה לתפריט.")
+        user_states[user_id] = 'awaiting_manu'
+        await update.message.reply_text("אפשרות לא מוכרת.הקש 0 לחזרה לתפריט.")
         return
 
 
@@ -674,37 +742,24 @@ async def handle_attendance(update, context):
 
 
 async def handle_superman_ammo(update, context):
-    ammo_sheet = 'תחמושת מפלג'
+    ammo_sheet = 'תחמושת'
     sheet = signatures_spreadsheet.worksheet(ammo_sheet)
-    df = pd.DataFrame(sheet.get_all_records())
+    df = pd.DataFrame(sheet.get_all_records(expected_headers=[]))
     matched_rows = df[df['מספר אישי'].astype(str) == input_id1]
     if matched_rows.empty:
         await update.message.reply_text(f"⚠️ לא נמצאו רשומות תחמושת עבור מספר אישי {input_id1}")
         return
     else:
         items = []
+        row_desc = ["\nברשותך התחמושת הבאה"]
         for _, row_data in matched_rows.iterrows():
-            total_items = str(row_data.get('סהכ', '')).strip()
+            item_type = str(row_data.get('סוג', '')).strip()
             item_id = str(row_data.get('מס', '')).strip()
-            if total_items or item_id:
-                row_desc = []
-                if total_items:
-                    if total_items == '1':
-                        row_desc.append("ברשותך רימון אחד")
-                    else:
-                        row_desc.append(f"ברשותך  — {total_items}רימונים ")
-                if item_id:
-                    if total_items == '1':
-                        row_desc.append(f"מספר — {item_id}")
-                    else:
-                        row_desc.append(f"מספר — {item_id}, {item_id} א")
-                items.append(" • " + ", ".join(row_desc))
-
-        if items:
-            response = "📦 *תחמושת:* \n" + "\n".join(items)
-            await update.message.reply_text(response, parse_mode='Markdown')
-        else:
-            await update.message.reply_text(f"✍️ לא נמצאו נתונים עבור מספר אישי {input_id1}")
+            total_items = str(row_data.get('סהכ', '')).strip()
+            row_desc.append(f"\n{item_type} עם מספר {item_id} ,כמות: {total_items}")
+        items.append("".join(row_desc))
+        response = "📦 *תחמושת:* \n" + "\n".join(items) +"\n\n"+ f"0️⃣ חזרה לתפריט הראשי\n\n"
+        await update.message.reply_text(response, parse_mode='Markdown')
 
 
 async def handle_signatures(update, context):
@@ -789,7 +844,8 @@ async def handle_signatures(update, context):
     response = (
             f"✍️ *נתונים עבור {full_name}:*\n" +
             "\n".join(lines) +
-            f"\nסה״כ רשומות: *{total}*"
+            f"\nסה״כ רשומות: *{total}*\n\n"
+            f"0️⃣ חזרה לתפריט הראשי\n\n"
     )
     await update.message.reply_text(response, parse_mode='Markdown')
     print(
@@ -798,14 +854,13 @@ async def handle_signatures(update, context):
 
 # ──────────────────────────────────────────────
 async def update_armory_movements(context: ContextTypes.DEFAULT_TYPE):
-
     actions_sheet = signatures_spreadsheet.worksheet('תנועות תחמושת')
     armory_sheet = signatures_spreadsheet.worksheet('ammo-sum')
 
     inventory_rows = armory_sheet.get_all_values()
     actions_rows = actions_sheet.get_all_values()
 
-    items_list=[]
+    items_list = []
     for idx, row in enumerate(inventory_rows[:-1]):  # skip last if i+1 needed
         items_list.append(inventory_rows[idx + 1][0])
 
@@ -827,12 +882,12 @@ async def update_armory_movements(context: ContextTypes.DEFAULT_TYPE):
             quantity = int(row[idx_quantity - 1].strip())
         except ValueError:
             continue
-        action = row[action_idx-1].strip()
+        action = row[action_idx - 1].strip()
         bunker_index = inv_headers.index('בונקר')
         if company != 'בונקר':
             col_index = inv_headers.index(company) + 1
             if item not in items_list:
-                armory_sheet.update_cell(len(inventory_rows)+1, 1, item)
+                armory_sheet.update_cell(len(inventory_rows) + 1, 1, item)
             for j, inv_row in enumerate(inventory_rows[1:], start=2):  # start=2 to match rows
                 if len(inv_row) < col_index:
                     continue
@@ -846,7 +901,7 @@ async def update_armory_movements(context: ContextTypes.DEFAULT_TYPE):
                         elif action == 'שצל':
                             bunker_new_val = bunker_current_val
                         else:
-                            bunker_new_val =bunker_current_val + quantity
+                            bunker_new_val = bunker_current_val + quantity
                         armory_sheet.update_cell(j, col_index, new_val)
                         armory_sheet.update_cell(j, bunker_index + 1, bunker_new_val)
                         actions_sheet.update_cell(i, idx_status, 'כן')
@@ -870,7 +925,7 @@ async def update_armory_movements(context: ContextTypes.DEFAULT_TYPE):
                     try:
                         current_val = int(inventory_rows[bunker_index])
                         new_val = current_val + quantity if action == 'קבלת תחמושת' else max(current_val - quantity, 0)
-                        armory_sheet.update_cell(inventory_index +1, bunker_index +1 , new_val)
+                        armory_sheet.update_cell(inventory_index + 1, bunker_index + 1, new_val)
                         actions_sheet.update_cell(i, idx_status, 'כן')
                         break
                     except ValueError:
@@ -960,6 +1015,7 @@ app = ApplicationBuilder().token(tele_token).build()
 app.add_handler(CommandHandler("start", start))
 app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
 # app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_quantity_input))
-app.job_queue.run_repeating(update_armory_movements, interval=10, first=1)
+app.job_queue.run_repeating(update_armory_movements, interval=1000, first=1)
 
 app.run_polling()
+
