@@ -14,7 +14,9 @@ from telegram.ext import ApplicationBuilder, CommandHandler, MessageHandler, Con
 # Setup Google Sheets access
 scope = ['https://spreadsheets.google.com/feeds',
          'https://www.googleapis.com/auth/drive']  # ,"https://www.googleapis.com/auth/spreadsheets"]
-creds = ServiceAccountCredentials.from_json_keyfile_name('cred.json', scope)
+BASE_DIR = Path(__file__).resolve().parent
+CREDS_PATH = BASE_DIR / "cred.json" 
+creds = ServiceAccountCredentials.from_json_keyfile_name(str(CREDS_PATH), scope)
 client = gspread.authorize(creds)
 
 # Global variables
