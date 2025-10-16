@@ -1,6 +1,5 @@
 from collections import defaultdict
 from datetime import datetime
-from pathlib import Path
 
 import gspread
 import pandas as pd
@@ -15,15 +14,13 @@ from telegram.ext import ApplicationBuilder, CommandHandler, MessageHandler, Con
 # Setup Google Sheets access
 scope = ['https://spreadsheets.google.com/feeds',
          'https://www.googleapis.com/auth/drive']  # ,"https://www.googleapis.com/auth/spreadsheets"]
-BASE_DIR = Path(__file__).resolve().parent
-CREDS_PATH = BASE_DIR / "cred.json" 
-creds = ServiceAccountCredentials.from_json_keyfile_name(str(CREDS_PATH), scope)
+creds = ServiceAccountCredentials.from_json_keyfile_name('cred.json', scope)
 client = gspread.authorize(creds)
 
 # Global variables
 # is_superman = False
-is_permitted = False
-is_admin = False
+# is_permitted = False
+# is_admin = False
 input_id1 = None
 user_admin_array = ['7228364', '7338109', '5263826']
 exclude = ['5914224']
@@ -83,6 +80,8 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 # ──────────────────────────────────────────────
 async def process_personal_id(update, context, input_id):
+    data = present_sheet.get_all_records()
+    df = pd.DataFrame(data)
     user_id = update.effective_user.id
     row = df[df['מספר אישי'].astype(str) == input_id]
     if input_id in exclude:
@@ -100,6 +99,7 @@ async def process_personal_id(update, context, input_id):
     context.user_data['personal_id'] = input_id
     context.user_data['row_data'] = row.iloc[0]
     context.user_data['team'] = await get_user_team(input_id)
+    context.user_data['name'] = await get_user_name(input_id)
     user_states[user_id] = 'awaiting_menu'
     global input_id1
     input_id1 = input_id
@@ -107,7 +107,7 @@ async def process_personal_id(update, context, input_id):
     await is_user_admin(update, context)
     await is_user_permitted(update, context)
     # await is_user_superman(update, context)
-    await show_main_menu(update)
+    await show_main_menu(update, context)
 
 
 # ────────────user-setters─────────────────────────
@@ -125,9 +125,7 @@ async def is_user_superman(update, context):
 
 
 async def is_user_admin(update, context):
-    if input_id1 in user_admin_array:
-        global is_admin
-        is_admin = True
+    return True if input_id1 in user_admin_array else False
 
 
 async def is_user_permitted(update, context):
@@ -135,8 +133,8 @@ async def is_user_permitted(update, context):
     all_rows = sheet.get_all_values()
     for row in all_rows[1:]:
         if input_id1 == row[1]:
-            global is_permitted
-            is_permitted = True
+            return True
+    return False
 
 
 # ────────────data-getters───────────────────────
@@ -187,11 +185,21 @@ async def get_user_team(input_id):
     return None
 
 
+async def get_user_name(input_id):
+    matched_rows = df[df['מספר אישי'].astype(str) == input_id]
+    if not matched_rows.empty:
+        f_name = str(matched_rows.iloc[0].get('שם פרטי', '')).strip()
+        l_name = str(matched_rows.iloc[0].get('שם משפחה', '')).strip()
+        return f_name + " " +l_name
+    return None
+
+
 async def get_ammo_summary_report(update, context):
     sheet = signatures_spreadsheet.worksheet('ammo-sum')
     rows = sheet.get_all_values()[1:]
     item_idx = sheet.get_all_values()[0].index("סוג תחמושת")
     totals = defaultdict(int)
+    is_admin = await is_user_admin(update, context)
 
     team_index = sheet.get_all_values()[0].index('סהכ') if is_admin else sheet.get_all_values()[0].index(
         context.user_data['team'])
@@ -319,6 +327,7 @@ async def get_weapon_report(update, context):
     rows = sheet.get_all_values()[1:]
     item_idx = 0
     totals = defaultdict(int)
+    is_admin = await is_user_admin(update, context)
 
     team_index = sheet.get_all_values()[0].index('סהכ') if is_admin else sheet.get_all_values()[0].index(
         context.user_data['team'])
@@ -423,6 +432,7 @@ async def get_guns_report(update, context):
     rows = sheet.get_all_values()[1:]
     item_idx = sheet.get_all_values()[0].index('סוג נשק')
     totals = defaultdict(int)
+    is_admin = await is_user_admin(update, context)
 
     team_index = (sheet.get_all_values()[0].index('סהכ') if not is_admin else sheet.get_all_values()[0].index(
         context.user_data['team'])) + item_idx
@@ -438,9 +448,12 @@ async def get_guns_report(update, context):
 
 # ──────────menus───────────────────────
 
-async def show_main_menu(update):
+async def show_main_menu(update, context):
+    is_permitted = await is_user_permitted(update, context)
+    is_admin = await is_user_admin(update, context)
     if is_admin or is_permitted:
         await update.message.reply_text(
+            f"👤 שלום, {context.user_data['name']}!\n"
             "📋 *תפריט ראשי:*\n"
             "1️⃣ נוכחות\n"
             "2️⃣ חתימות\n"
@@ -453,6 +466,7 @@ async def show_main_menu(update):
         )
     else:
         await update.message.reply_text(
+            f"👤 שלום, {context.user_data['name']}!\n\n"
             "📋 *תפריט ראשי:*\n"
             "1️⃣ נוכחות\n"
             "2️⃣ חתימות\n"
@@ -464,7 +478,8 @@ async def show_main_menu(update):
         )
 
 
-async def show_report_manu(update):
+async def show_report_manu(update, context):
+    is_admin = await is_user_admin(update, context)
     if is_admin:
         await update.message.reply_text(
             "📋 *תפריט ,דוחות ראשי:*\n"
@@ -493,6 +508,7 @@ async def show_report_manu(update):
 
 
 async def show_report_response(context, update, response):
+    is_admin = await is_user_admin(update, context)
     msg = 'דוח תחמושת מסכם' if is_admin else f"דוח תחמושת מסכם עבור {context.user_data['team']}"
     response = response if response != '' else "אין תחמושת ברשותך"
     await update.message.reply_text(
@@ -530,6 +546,7 @@ async def show_weapon_summary_report_response(context, update, response, respons
 
 
 async def show_weapon_report_response(context, update, response):
+    is_admin = await is_user_admin(update, context)
     msg = 'דוח צלמ מסכם' if is_admin else f"דוח צלמ מסכם עבור {context.user_data['team']}"
     response = response if response != '' else "אין צלמ ברשותך"
     await update.message.reply_text(
@@ -541,6 +558,7 @@ async def show_weapon_report_response(context, update, response):
 
 
 async def show_guns_report_response(context, update, response):
+    is_admin = await is_user_admin(update, context)
     msg = 'דוח נשק מסכם' if is_admin else f"דוח נשק מסכם עבור {context.user_data['team']}"
     response = response if response != '' else "אין צלמ ברשותך"
     await update.message.reply_text(
@@ -596,9 +614,11 @@ async def show_logistic_report_response(context, update, response):
 
 # ──────────menu-handlers───────────────────────
 async def handle_menu_choice(update, context, choice):
+    is_permitted = await is_user_permitted(update, context)
+    is_admin = await is_user_admin(update, context)
     user_id = update.effective_user.id
     if choice == '0':
-        await show_main_menu(update)
+        await show_main_menu(update, context)
         return
 
     elif choice == '1':
@@ -620,7 +640,10 @@ async def handle_menu_choice(update, context, choice):
         return
     elif choice == '5' and is_admin or is_permitted:
         user_states[user_id] = 'awaiting_report'
-        await show_report_manu(update)
+        await show_report_manu(update, context)
+        return
+    elif choice == '6':
+        await handle_notes(update,context)
         return
 
     else:
@@ -632,9 +655,11 @@ async def handle_menu_choice(update, context, choice):
 async def handle_report_manu_choice(update, context, choice):
     user_id = update.effective_user.id
     user_states[user_id] = 'awaiting_manu'
+    is_permitted = await is_user_admin(update, context)
+    is_admin = await is_user_admin(update, context)
     if choice == '0':
         user_states[user_id] = 'awaiting_manu'
-        await show_main_menu(update)
+        await show_main_menu(update, context)
         return
     elif choice == '1' and is_admin:
         user_states[user_id] = 'awaiting_manu'
@@ -702,6 +727,8 @@ async def handle_report_manu_choice(update, context, choice):
 
 # ──────────handlers──────────────────────────
 async def handle_attendance(update, context):
+    data = present_sheet.get_all_records()
+    df = pd.DataFrame(data)
     input_id = context.user_data.get('personal_id')
     row_data = context.user_data.get('row_data')
 
@@ -764,6 +791,8 @@ async def handle_superman_ammo(update, context):
         response = "📦 *תחמושת:* \n" + "\n".join(items) +"\n\n"+ f"0️⃣ חזרה לתפריט הראשי\n\n"
         await update.message.reply_text(response, parse_mode='Markdown')
 
+async def handle_notes(update, context):
+    pass
 
 async def handle_signatures(update, context):
     user_id = update.effective_user.id
@@ -1021,4 +1050,3 @@ app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
 app.job_queue.run_repeating(update_armory_movements, interval=1000, first=1)
 
 app.run_polling()
-
